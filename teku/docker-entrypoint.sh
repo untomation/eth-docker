@@ -45,6 +45,9 @@ if [ -n "${CHECKPOINT_SYNC_URL:+x}" ]; then
       if [ "${NETWORK}" = "hoodi" ]; then
         __checkpoint_sync+=" --initial-state=https://checkpoint-sync.hoodi.ethpandaops.io/eth/v2/debug/beacon/states/genesis"
       fi
+      if [ "${NETWORK}" = "holesky" ]; then
+        __checkpoint_sync+=" --initial-state=https://checkpoint-sync.holesky.ethpandaops.io/eth/v2/debug/beacon/states/genesis"
+      fi
     else
         __checkpoint_sync="--checkpoint-sync-url=${CHECKPOINT_SYNC_URL}"
         echo "Checkpoint sync enabled"
@@ -53,6 +56,9 @@ else
     __checkpoint_sync="--ignore-weak-subjectivity-period-enabled=true"
     if [ "${NETWORK}" = "hoodi" ]; then
       __checkpoint_sync+=" --initial-state=https://checkpoint-sync.hoodi.ethpandaops.io/eth/v2/debug/beacon/states/genesis"
+    fi
+    if [ "${NETWORK}" = "holesky" ]; then
+      __checkpoint_sync+=" --initial-state=https://checkpoint-sync.holesky.ethpandaops.io/eth/v2/debug/beacon/states/genesis"
     fi
 fi
 

@@ -26,8 +26,17 @@ if [[ -O "/var/lib/erigon/ee-secret/jwtsecret" ]]; then
   chmod 666 /var/lib/erigon/ee-secret/jwtsecret
 fi
 
-if [[ "${NETWORK}" =~ ^https?:// ]]; then
-  echo "Custom testnet at ${NETWORK}"
+if [[ "${NETWORK}" = "gnosis" ]]; then
+  echo "gnosis: Running with prune.r.before=19469077 for gno deposit contract"
+  __prune="--prune=htc --prune.r.before=19469077"
+elif [[ "${NETWORK}" = "hoodi" ]]; then
+  echo "hoodi: Running without prune.r for eth deposit contract"
+  __prune="--prune=htc"
+elif [[ "${NETWORK}" = "holesky" ]]; then
+  echo "holesky: Running without prune.r for eth deposit contract"
+  __prune="--prune=htc"
+elif [[ "${NETWORK}" =~ ^https?:// ]]; then
+  echo "Custom testnet: Running without prune.r for eth deposit contract"
   repo=$(awk -F'/tree/' '{print $1}' <<< "${NETWORK}")
   branch=$(awk -F'/tree/' '{print $2}' <<< "${NETWORK}" | cut -d'/' -f1)
   config_dir=$(awk -F'/tree/' '{print $2}' <<< "${NETWORK}" | cut -d'/' -f2-)

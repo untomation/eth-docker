@@ -3157,8 +3157,9 @@ __query_network() {
   __var="NETWORK"
   __get_value_from_env "${__var}" "${__env_file}" "__prev_network"
   NETWORK=$(whiptail --notags --title "Select Network" --menu \
-  "Which network do you want to run on?" 14 65 6 \
+  "Which network do you want to run on?" 15 65 7 \
   "hoodi" "Hoodi Testnet" \
+  "holesky" "Holešky Testnet" \
   "ephemery" "Ephemery Testnet" \
   "mainnet" "Ethereum Mainnet" \
   "gnosis" "Gnosis Chain" \
@@ -3172,7 +3173,7 @@ __query_network() {
     "gnosis")
       echo "You chose to run on Gnosis Chain"
       ;;
-    "sepolia" | "hoodi" )
+    "sepolia" | "hoodi" | "holesky" )
       echo "You chose to run on ${NETWORK} testnet"
       ;;
     "custom" )
@@ -3496,7 +3497,7 @@ __query_execution_client() {
     __choices+=("geth.yml" "Geth (Go)")
   fi
 
-  if [[ "${__arch}" != *"riscv64"* ]] && [[ "${NETWORK}" =~ (hoodi|sepolia) ]]; then
+  if [[ "${__arch}" != *"riscv64"* ]] && [[ "${NETWORK}" =~ (hoodi|holesky|sepolia) ]]; then
     __choices+=("nimbus-el.yml" "Nimbus (Nim) - alpha")
   fi
 
@@ -3581,6 +3582,9 @@ __query_checkpoint_beacon() {
       "hoodi")
         CHECKPOINT_SYNC_URL="https://hoodi.beaconstate.info"
         ;;
+      "holesky")
+        CHECKPOINT_SYNC_URL="https://holesky.beaconstate.info"
+        ;;
       "ephemery")
         CHECKPOINT_SYNC_URL="https://ephemery.beaconstate.ethstaker.cc/"
         ;;
@@ -3654,6 +3658,9 @@ __query_coinbase() {
         "hoodi")
           FEE_RECIPIENT="0x9b108015fe433F173696Af3Aa0CF7CDb3E104258"
           ;;
+        "holesky")
+          FEE_RECIPIENT="0xE73a3602b99f1f913e72F8bdcBC235e206794Ac8"
+          ;;
         *)
           FEE_RECIPIENT="0x0000000000000000000000000000000000000000"
           ;;
@@ -3707,6 +3714,9 @@ __query_mev() {
     case "${NETWORK}" in
       "hoodi")
         MEV_RELAYS="https://0xaa58208899c6105603b74396734a6263cc7d947f444f396a90f7b7d3e65d102aec7e5e5291b27e08d02c50a050825c2f@hoodi.titanrelay.xyz,https://0x98f0ef62f00780cf8eb06701a7d22725b9437d4768bb19b363e882ae87129945ec206ec2dc16933f31d983f8225772b6@hoodi.aestus.live,https://0xafa4c6985aa049fb79dd37010438cfebeb0f2bd42b115b89dd678dab0670c1de38da0c4e9138c9290a398ecd9a0b3110@boost-relay-hoodi.flashbots.net,https://0xb1559beef7b5ba3127485bbbb090362d9f497ba64e177ee2c8e7db74746306efad687f2cf8574e38d70067d40ef136dc@relay-hoodi.ultrasound.money"
+        ;;
+      "holesky")
+        MEV_RELAYS="https://0xafa4c6985aa049fb79dd37010438cfebeb0f2bd42b115b89dd678dab0670c1de38da0c4e9138c9290a398ecd9a0b3110@boost-relay-holesky.flashbots.net,https://0xaa58208899c6105603b74396734a6263cc7d947f444f396a90f7b7d3e65d102aec7e5e5291b27e08d02c50a050825c2f@holesky.titanrelay.xyz,https://0x821f2a65afb70e7f2e820a925a9b4c80a159620582c1766b1b09729fec178b11ea22abb3a51f07b288be815a1a2ff516@bloxroute.holesky.blxrbdn.com,https://0xb1559beef7b5ba3127485bbbb090362d9f497ba64e177ee2c8e7db74746306efad687f2cf8574e38d70067d40ef136dc@relay-stag.ultrasound.money"
         ;;
       "mainnet")
         MEV_RELAYS="https://0xac6e77dfe25ecd6110b8e780608cce0dab71fdd5ebea22a16c0205200f2f8e2e3ad3b71d3499c54ad14d6c21b41a37ae@boost-relay.flashbots.net,\
@@ -3779,6 +3789,21 @@ want to use MEV Boost?" 10 65); then
                   "Ultrasound" "" ON \
                   3>&1 1>&2 2>&3)
               ;;
+          "holesky")
+              relays=(
+                  ['Aestus']="https://0xab78bf8c781c58078c3beb5710c57940874dd96aef2835e7742c866b4c7c0406754376c2c8285a36c630346aa5c5f833@holesky.aestus.live"
+                  ['Titan']="https://0xaa58208899c6105603b74396734a6263cc7d947f444f396a90f7b7d3e65d102aec7e5e5291b27e08d02c50a050825c2f@holesky.titanrelay.xyz"
+                  ['Flashbots']="https://0xafa4c6985aa049fb79dd37010438cfebeb0f2bd42b115b89dd678dab0670c1de38da0c4e9138c9290a398ecd9a0b3110@boost-relay-holesky.flashbots.net"
+                  ['Ultrasound']="https://0xb1559beef7b5ba3127485bbbb090362d9f497ba64e177ee2c8e7db74746306efad687f2cf8574e38d70067d40ef136dc@relay-stag.ultrasound.money"
+              )
+              __selected=$(whiptail --title "Relays list" --checklist \
+                  "Choose relays" 12 30 5 \
+                  "Aestus" "" ON \
+                  "Titan" "" ON \
+                  "Flashbots" "" ON \
+                  "Ultrasound" "" ON \
+                  3>&1 1>&2 2>&3)
+              ;;
             *)
               echo "No MEV RELAYS configured for ${NETWORK}"
               return
@@ -3836,6 +3861,9 @@ want to use MEV Boost?" 10 65); then
         "hoodi")
           MEV_RELAYS="https://0xaa58208899c6105603b74396734a6263cc7d947f444f396a90f7b7d3e65d102aec7e5e5291b27e08d02c50a050825c2f@hoodi.titanrelay.xyz,https://0x98f0ef62f00780cf8eb06701a7d22725b9437d4768bb19b363e882ae87129945ec206ec2dc16933f31d983f8225772b6@hoodi.aestus.live,https://0xafa4c6985aa049fb79dd37010438cfebeb0f2bd42b115b89dd678dab0670c1de38da0c4e9138c9290a398ecd9a0b3110@boost-relay-hoodi.flashbots.net,https://0xb1559beef7b5ba3127485bbbb090362d9f497ba64e177ee2c8e7db74746306efad687f2cf8574e38d70067d40ef136dc@relay-hoodi.ultrasound.money"
           ;;
+        "holesky")
+          MEV_RELAYS="https://0xafa4c6985aa049fb79dd37010438cfebeb0f2bd42b115b89dd678dab0670c1de38da0c4e9138c9290a398ecd9a0b3110@boost-relay-holesky.flashbots.net,https://0xaa58208899c6105603b74396734a6263cc7d947f444f396a90f7b7d3e65d102aec7e5e5291b27e08d02c50a050825c2f@holesky.titanrelay.xyz,https://0x821f2a65afb70e7f2e820a925a9b4c80a159620582c1766b1b09729fec178b11ea22abb3a51f07b288be815a1a2ff516@bloxroute.holesky.blxrbdn.com,https://0xb1559beef7b5ba3127485bbbb090362d9f497ba64e177ee2c8e7db74746306efad687f2cf8574e38d70067d40ef136dc@relay-stag.ultrasound.money"
+          ;;
         "mainnet")
           MEV_RELAYS=https://0xac6e77dfe25ecd6110b8e780608cce0dab71fdd5ebea22a16c0205200f2f8e2e3ad3b71d3499c54ad14d6c21b41a37ae@boost-relay.flashbots.net,\
 https://0x8b5d2e73e2a3a55c6c87b8b6eb92e0149a125c852751db1422fa951e42a09b82c142c3ea98d0d9930b056a3bc9896b8f@bloxroute.max-profit.blxrbdn.com,\
@@ -3874,6 +3902,9 @@ __lido_withdrawal_credentials_address() {
             ;;
         "hoodi")
             __lido_address="0x4473dCDDbf77679A643BdB654dbd86D67F8d32f2"
+            ;;
+        "holesky")
+            __lido_address="0xF0179dEC45a37423EAD4FaD5fCb136197872EAd9"
             ;;
         *)
             __lido_address="0x0000000000000000000000000000000000000000"
@@ -4140,6 +4171,8 @@ config() {
     "ssv" | "lido_ssv")
       if [ "${NETWORK}" = "hoodi" ]; then
         sed -i'.original' 's/  Network: .*/  Network: hoodi/' ssv-config/config.yaml
+      elif [ "${NETWORK}" = "holesky" ]; then
+        sed -i'.original' 's/  Network: .*/  Network: holesky/' ssv-config/config.yaml
       elif [ "${NETWORK}" = "mainnet" ]; then
         sed -i'.original' 's/  Network: .*/  Network: mainnet/' ssv-config/config.yaml
       else
@@ -4211,7 +4244,7 @@ config() {
       else
         __lido_keys_attention_message
       fi
-      if [ "${NETWORK}" = "hoodi" ]; then
+      if [[ "${NETWORK}" =~ (hoodi|holesky) ]]; then
         __link="https://csm.testnet.fi/?ref=ethdocker"
       else
         __link="https://csm.lido.fi/?ref=ethdocker"
@@ -4360,7 +4393,7 @@ config() {
     COMPOSE_FILE="${COMPOSE_FILE}:lido-obol.yml"
   fi
   if { [ "${__deployment}" = "node" ] || [ "${__deployment}" = "rocket" ]; } \
-  && [ "${NETWORK}" = "hoodi" ]; then
+  && [[ "${NETWORK}" =~ (hoodi|holesky) ]]; then
     COMPOSE_FILE="${COMPOSE_FILE}:deposit-cli.yml"
   fi
   if [ "${__deployment}" = "lido_csm" ]; then

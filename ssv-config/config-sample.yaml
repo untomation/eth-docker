@@ -1,5 +1,5 @@
 ssv:
-  Network: hoodi
+  Network: hoodi  # Use "holesky" for Holesky testnet, "mainnet" for mainnet
   ValidatorOptions:
     BuilderProposals: true
 KeyStore:

@@ -86,6 +86,15 @@ elif [[ "${NETWORK}" = "hoodi" ]]; then
 # Word splitting is desired for the command line parameters
 # shellcheck disable=SC2086
   exec "$@" "--genesis-state=$GENESIS" ${__network} ${__checkpoint_sync} ${__prune} ${__mev_boost} ${CL_EXTRAS}
+elif [[ "${NETWORK}" = "holesky" ]]; then
+  GENESIS=/var/lib/prysm/genesis.ssz
+  if [ ! -f "$GENESIS" ]; then
+    echo "Fetching genesis file for Holešky testnet"
+    curl -fsSL -o "$GENESIS" https://github.com/eth-clients/holesky/raw/main/metadata/genesis.ssz
+  fi
+# Word splitting is desired for the command line parameters
+# shellcheck disable=SC2086
+  exec "$@" "--genesis-state=$GENESIS" ${__network} ${__checkpoint_sync} ${__prune} ${__mev_boost} ${CL_EXTRAS}
 else
 # Word splitting is desired for the command line parameters
 # shellcheck disable=SC2086
