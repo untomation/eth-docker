@@ -2360,6 +2360,15 @@ prune-history() {
     exit 1
   fi
 
+# Only PoW right now, which is mainnet or sepolia
+  __var=NETWORK
+  __get_value_from_env "${__var}" "${__env_file}" "__value"
+  if [[ ! "${__value}" =~ ^(mainnet|sepolia)$ ]]; then
+    echo "There is no pre-merge history for ${__value} network."
+    echo "Nothing to do. Aborting."
+    exit 0
+  fi
+
 # Check whether this has already been done
   __var=EL_MINIMAL_NODE
   __get_value_from_env "${__var}" "${__env_file}" "__value"
@@ -2374,8 +2383,8 @@ prune-history() {
   case "${__value}" in
     *geth.yml* )
       __client="Geth"
-      __min_ver="master / latest"
-      __extra_msg="To prune pre-merge history, a full resync is required, which should take 6-8 hours.\nYou can use https://rescuenode.com to keep attesting during resync."
+      __min_ver="v1.16.0"
+      __extra_msg="Pre-merge history can be pruned by Geth without requiring a full resync. You can observe pruning with \"./ethd logs -f execution\"."
       __prune_marker="/var/lib/geth/prune-marker"
       ;;
     *nimbus-el.yml* )
@@ -2404,10 +2413,10 @@ prune-history() {
       ;;
     *erigon.yml* )
       __client="Erigon"
-      __min_ver="vTBD"
+      __min_ver="v3.0.12"
       __extra_msg="To prune pre-merge history, a full resync is required, which should take 2-3 hours.\nYou can use https://rescuenode.com to keep attesting during resync."
       __prune_marker=""
-      ;;&
+      ;;
     * )
       echo "${__me} does not know how to prune pre-merge history on ${__client:-MysteryClient},"
       echo "nor how to configure it for pre-merge history expiry on fresh sync."
@@ -4278,7 +4287,11 @@ config() {
       else
         __query_4444 ""
       fi
+    else  # On all other networks, disable
+#shellcheck disable=SC2034
+      EL_MINIMAL_NODE=false
     fi
+
     __query_checkpoint_sync
     __query_mev
     __query_grafana
