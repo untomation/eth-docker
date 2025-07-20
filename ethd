@@ -122,11 +122,13 @@ __handle_docker() {
 
     __var=NODE_EXPORTER_IGNORE_MOUNT_REGEX
     __get_value_from_env "${__var}" "${__env_file}" "__value"
-    __regex="^'\^/\(dev\|proc\|sys\|run\|.+/\.\+\)\(\$\|/\)'$"
+# Match either of the patterns Eth Docker uses. Leave alone if there are user changes to the var
+# Match literal `'^/(dev|proc|sys|run|some/path/.+)($|/)'` or `'^/(dev|proc|sys|run|var/snap/.+|some/path/.+)($|/)'
+    __regex="^'\^\/\(dev\|proc\|sys\|run\|(var\/snap\/\.\+\|)?[a-zA-Z/]+\/\.\+\)\(\\$\|\/\)'$"
     if [[ "${__value}" =~ ${__regex} ]]; then
 # This gets used, but shellcheck doesn't recognize that
 # shellcheck disable=SC2034
-      NODE_EXPORTER_IGNORE_MOUNT_REGEX="'^/(dev|proc|sys|run|${DOCKER_ROOT#/}/.+)($|/)'"
+      NODE_EXPORTER_IGNORE_MOUNT_REGEX="'^/(dev|proc|sys|run|var/snap/.+|${DOCKER_ROOT#/}/.+)($|/)'"
       __update_value_in_env "${__var}" "${!__var}" "${__env_file}"
     fi
   fi
@@ -1778,6 +1780,47 @@ reset to defaults."
 }
 
 
+__verify_ancient_dir() {
+  if [ -z "$1" ]; then
+    return 1
+  fi
+  local __dir="$1"
+
+  if [ ! -d "${__dir}" ]; then
+    echo "ANCIENT_DIR ${__dir} is not a directory. This is a configuration error."
+    return 1
+  fi
+
+  local __entries
+  if ! mapfile -t __entries < <(${__auto_sudo} find "${__dir}" -mindepth 1 -maxdepth 1 -exec basename {} \;); then
+    echo "ANCIENT_DIR ${__dir} contents could not be listed. This is unexpected and may be a configuration error, or a bug."
+    return 1
+  fi
+
+  # Check if all entries are files - this is Reth
+  local __all_files=true
+  for __entry in "${__entries[@]}"; do
+    if [[ -d "${__dir}/${__entry}" ]]; then
+      __all_files=false
+      break
+    fi
+  done
+
+  if [ "${__all_files}" = "true" ]; then
+    return 0
+  else
+    # Check for exactly two directories: 'chain' and 'state' - this is Geth
+    if [[ ${#__entries[@]} -eq 2 ]] && \
+       [[ -d "${__dir}/chain" && -d "${__dir}/state" ]]; then
+      return 0
+    fi
+  fi
+
+   echo "ANCIENT_DIR ${__dir} looks like neither a Geth nor Reth directory: Leaving it alone out of caution"
+   return 1
+}
+
+
 resync-execution() {
 # Check for EL client
   __var="COMPOSE_FILE"
@@ -1851,6 +1894,12 @@ resync-execution() {
   fi
   if [ -n "${__volume_id}" ]; then
     __dodocker volume rm "${__volume_id}"
+  fi
+  __var="ANCIENT_DIR"
+  __get_value_from_env "${__var}" "${__env_file}" "__value"
+  if __verify_ancient_dir "${__value}"; then
+    echo "Removing contents of ancient/static directory ${__value}"
+    ${__auto_sudo} rm -rf "${__value%/}/"*
   fi
   echo
   echo "${__el_client} stopped and database deleted."
@@ -2311,6 +2360,15 @@ prune-history() {
     exit 1
   fi
 
+# Only PoW right now, which is mainnet or sepolia
+  __var=NETWORK
+  __get_value_from_env "${__var}" "${__env_file}" "__value"
+  if [[ ! "${__value}" =~ ^(mainnet|sepolia)$ ]]; then
+    echo "There is no pre-merge history for ${__value} network."
+    echo "Nothing to do. Aborting."
+    exit 0
+  fi
+
 # Check whether this has already been done
   __var=EL_MINIMAL_NODE
   __get_value_from_env "${__var}" "${__env_file}" "__value"
@@ -2325,8 +2383,8 @@ prune-history() {
   case "${__value}" in
     *geth.yml* )
       __client="Geth"
-      __min_ver="master / latest"
-      __extra_msg="To prune pre-merge history, a full resync is required, which should take 6-8 hours.\nYou can use https://rescuenode.com to keep attesting during resync."
+      __min_ver="v1.16.0"
+      __extra_msg="Pre-merge history can be pruned by Geth without requiring a full resync. You can observe pruning with \"./ethd logs -f execution\"."
       __prune_marker="/var/lib/geth/prune-marker"
       ;;
     *nimbus-el.yml* )
@@ -2349,16 +2407,16 @@ prune-history() {
       ;;
     *reth.yml* )
       __client="Reth"
-      __min_ver="vTBD"
-      __extra_msg="To prune pre-merge history, a full resync is required, which should take 4 days.\nYou can use https://rescuenode.com to keep attesting during resync."
-      __prune_marker=""
-      ;;&
+      __min_ver="v1.5.0"
+      __extra_msg="Pruning pre-merge history does not require a resync and should be immediate.\nA resync saves more space than a prune: You can set \"EL_MINIMAL_NODE=true\" manually with \"nano .env\" and then resync with \"./ethd resync-execution\"."
+      __prune_marker="/var/lib/reth/minimal-node"
+      ;;
     *erigon.yml* )
       __client="Erigon"
-      __min_ver="vTBD"
+      __min_ver="v3.0.12"
       __extra_msg="To prune pre-merge history, a full resync is required, which should take 2-3 hours.\nYou can use https://rescuenode.com to keep attesting during resync."
       __prune_marker=""
-      ;;&
+      ;;
     * )
       echo "${__me} does not know how to prune pre-merge history on ${__client:-MysteryClient},"
       echo "nor how to configure it for pre-merge history expiry on fresh sync."
@@ -4223,14 +4281,17 @@ config() {
       __query_execution_client
     fi
 
-    if [[ "${EXECUTION_CLIENT}" =~ (erigon.yml|nimbus-el.yml) ]] \
-        && [[ "${NETWORK}" =~ (mainnet|sepolia) ]]; then
+    if [[ -n "${EXECUTION_CLIENT+x}" && "${NETWORK}" =~ (mainnet|sepolia) ]]; then
       if [[ "${__deployment}" = "rpc" ]]; then
         __query_4444 --defaultno
       else
         __query_4444 ""
       fi
+    else  # On all other networks, disable
+#shellcheck disable=SC2034
+      EL_MINIMAL_NODE=false
     fi
+
     __query_checkpoint_sync
     __query_mev
     __query_grafana
@@ -4364,8 +4425,8 @@ config() {
 (right-click to paste)" 10 60 3>&1 1>&2 2>&3)
     __obol_prom_remote_token=$(whiptail --title "Obol prometheus" --inputbox "Put Obol Prometheus remote write token \
 (right-click to paste)" 10 60 3>&1 1>&2 2>&3)
-    cat ./prometheus/obol-prom.yml > ./prometheus/custom-prom.yml
-    sed -i'.original' "s|      credentials: OBOL_PROM_REMOTE_WRITE_TOKEN|      credentials: ${__obol_prom_remote_token}|" ./prometheus/custom-prom.yml
+    cat ./prometheus/obol-prom.yml.sample > ./prometheus/custom-prom.yml
+    sed -i'.original' "s|      credentials: <PROM_REMOTE_WRITE_TOKEN>|      credentials: ${__obol_prom_remote_token}|" ./prometheus/custom-prom.yml
     rm -f ./prometheus/custom-prom.yml.original
   fi
 

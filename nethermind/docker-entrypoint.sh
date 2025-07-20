@@ -82,16 +82,19 @@ elif [[ ! "${NETWORK}" =~ ^https?:// ]]; then  # Only configure prune parameters
   if [ "${MINIMAL_NODE}" = "true" ]; then
     case "${NETWORK}" in
       mainnet )
-        echo "Methermind minimal node with pre-merge history expiry"
+        echo "Nethermind minimal node with pre-merge history expiry"
         __prune+=" --Sync.AncientBodiesBarrier=15537394 --Sync.AncientReceiptsBarrier=15537394"
         ;;
       sepolia )
-        echo "Relying on Nethermind default expiry for Sepolia minimal node"
+        echo "Nethermind minimal node with pre-merge history expiry"
         ;;
       * )
-        echo "There is no known pre-merge history for ${NETWORK}, EL_MINIMAL_NODE has no effect."
+        echo "There is no pre-merge history for ${NETWORK} network, EL_MINIMAL_NODE has no effect."
         ;;
     esac
+  else  # Full node
+    echo "Nethermind full node without history expiry"
+    __prune+=" --Sync.AncientBodiesBarrier=0 --Sync.AncientReceiptsBarrier=0"
   fi
   echo "Using pruning parameters:"
   echo "${__prune}"
