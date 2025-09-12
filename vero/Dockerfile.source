@@ -1,7 +1,8 @@
+# hadolint global ignore=DL3007,DL3008,DL3059,DL4006
 ARG VENV_LOCATION="/opt/venv"
 
 # Build image
-FROM python:3.13-bookworm AS builder
+FROM python:3.12-trixie AS builder
 
 # Unused but included to avoid warnings
 ARG DOCKER_TAG
@@ -18,13 +19,14 @@ RUN apt-get update && apt-get install --no-install-recommends -y bash git && \
    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 ENV PATH="$VENV_LOCATION/bin:$PATH"
-RUN pip install --no-cache-dir uv && uv venv ${VENV_LOCATION}
-RUN bash -c "git clone ${SRC_REPO} vero && cd vero && git config advice.detachedHead false && git fetch --all --tags \
+# Pin uv to 0.6 until https://github.com/serenita-org/vero/pull/193 is in a release
+RUN pip install --no-cache-dir uv~=0.6.17 && uv venv ${VENV_LOCATION}
+RUN bash -o pipefail -c "git clone ${SRC_REPO} vero && cd vero && git config advice.detachedHead false && git fetch --all --tags \
   && if [[ ${BUILD_TARGET} =~ pr-.+ ]]; then git fetch origin pull/$(echo ${BUILD_TARGET} | cut -d '-' -f 2)/head:vero-pr; git checkout vero-pr; else git checkout ${BUILD_TARGET}; fi \
   && uv pip sync --prefix ${VENV_LOCATION} requirements.txt"
 
 # App image
-FROM python:3.13-bookworm
+FROM python:3.12-trixie
 
 ARG USER=vero
 ARG UID=10000
@@ -34,10 +36,10 @@ COPY --from=builder $VENV_LOCATION $VENV_LOCATION
 ENV PATH="$VENV_LOCATION/bin:$PATH"
 
 RUN groupadd -g ${UID} ${USER} && \
-    useradd --no-create-home --shell /bin/false -u ${UID} -g ${USER} ${USER}
+    useradd --no-create-home --shell /bin/false -l -u ${UID} -g ${USER} ${USER}
 
 RUN set -eux; \
-        apt-get update && DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get install -y gosu ca-certificates tzdata git wget curl; \
+        apt-get update && DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get install -y --no-install-recommends gosu ca-certificates tzdata git wget curl; \
         rm -rf /var/lib/apt/lists/*; \
 # verify that the binary works
         gosu nobody true

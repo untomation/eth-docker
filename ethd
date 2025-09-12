@@ -263,10 +263,10 @@ __prep_conffiles() {
   fi
 # Create config.yaml if it doesn't exist
   if [ ! -f "ssv-config/config.yaml" ]; then
-    ${__as_owner} cp ssv-config/config-sample.yaml ssv-config/config.yaml
+    ${__as_owner} cp ssv-config/config.yaml.sample ssv-config/config.yaml
   fi
   if [ ! -f "ssv-config/dkg-config.yaml" ]; then
-    ${__as_owner} cp ssv-config/dkg-config-sample.yaml ssv-config/dkg-config.yaml
+    ${__as_owner} cp ssv-config/dkg-config.yaml.sample ssv-config/dkg-config.yaml
   fi
 # Make sure ssv-config yaml files are 664
   if find ssv-config -maxdepth 0 \! -perm 755 | grep -q .; then
@@ -280,15 +280,20 @@ __prep_conffiles() {
     if [ "$__cannot_sudo" -eq 0 ]; then
       echo "Fixing ownership of .eth/dkg_output"
       ${__auto_sudo} chown -R "${OWNER}:${OWNER_GROUP}" .eth/dkg_output
-      ${__auto_sudo} chmod -R 755 .eth/dkg_output
+      ${__auto_sudo} chmod 755 .eth/dkg_output
     else
       echo "Ownership of .eth/dkg_output should be fixed, but this user can't sudo"
     fi
   fi
-# Make sure the dkg output dir and its contents are mod 0755
-  if find .eth/dkg_output \! -perm 755 | grep -q .; then
-    chmod -R 755 .eth/dkg_output
+# Make sure the dkg output dir and its subdirs are mod 0755
+  if find .eth/dkg_output -type d \! -perm 755 | grep -q .; then
+    find .eth/dkg_output -type d -exec chmod 755 {} \;
   fi
+# Make sure the contents of the dkg output dir are mod 0644
+  if find .eth/dkg_output -type f \! -perm 644 | grep -q .; then
+    find .eth/dkg_output -type f -exec chmod 644 {} \;
+  fi
+
 # Create cb-config.toml if it doesn't exist
   if [ ! -f "commit-boost/cb-config.toml" ]; then
     ${__as_owner} cp commit-boost/cb-config.toml.sample commit-boost/cb-config.toml
@@ -664,12 +669,13 @@ __display_docker_dir() {
 
 __display_docker_volumes() {
   echo
-  if [ -z "$(__dodocker volume ls -q -f "name=^$(basename "$(realpath .)" | tr '[:upper:]' '[:lower:]')_[^_]+")" ]; then
+  # Assume project name and volume are delimited by _ and there is no _ in the volume name. Done to avoid catching project-2 while looking at project
+  if [ -z "$(__dodocker volume ls -q -f "name=^$(basename "$(realpath .)" | tr '[:upper:]' '[:lower:]')_[^_]+$")" ]; then
     echo "There are no Docker volumes for this copy of ${__project_name}"
     echo
   else
     echo "Here are the Docker volumes used by this copy of ${__project_name} and their space usage:"
-    __dodocker system df -v | grep -A 500 "VOLUME NAME" | grep -i "^$(basename "$(dirname "$(realpath "${BASH_SOURCE[0]}")")")"
+    __dodocker system df -v | grep -A 500 "VOLUME NAME" | grep -iE "^$(basename "$(dirname "$(realpath "${BASH_SOURCE[0]}")")")_[^_]+$"
     echo
     echo "If your Consensus Layer client takes more than 300 GiB, you can resync it with"
     echo "\"${__me} resync-consensus\"."
@@ -1011,11 +1017,11 @@ __upgrade_postgres() {
   echo "In failure case, do not start Web3signer again, instead seek help on Ethstaker Discord."
   echo
 
-  __dodocker pull "pgautoupgrade/pgautoupgrade:${__target_pg}-bookworm"
+  __dodocker pull "pgautoupgrade/pgautoupgrade:${__target_pg}-debian"
   __during_migrate=1
   __dodocker run --rm -v "${__source_vol}":"/var/lib/postgresql/data" \
    -e PGAUTO_ONESHOT=yes -e POSTGRES_PASSWORD=postgres -e POSTGRES_USER=postgres \
-   "pgautoupgrade/pgautoupgrade:${__target_pg}-bookworm"
+   "pgautoupgrade/pgautoupgrade:${__target_pg}-debian"
 
   __migrated=1
 
@@ -1027,13 +1033,67 @@ __upgrade_postgres() {
   __var="PG_DOCKER_TAG"
 # This gets used, but shellcheck doesn't recognize that
 # shellcheck disable=SC2034
-  PG_DOCKER_TAG=${__target_pg}-bookworm # To bookworm to avoid collation errors - also a faster PostgreSQL
+  PG_DOCKER_TAG=${__target_pg}-trixie # To debian to avoid collation errors - also a faster PostgreSQL
   __update_value_in_env "${__var}" "${!__var}" "${__env_file}"
   echo "Web3signer has been stopped. You'll need to run \"${__me} update\" and \"${__me} up\" to start it again."
   echo
   echo "A copy of your old slashing protection database is in the Docker volume ${__backup_vol}."
   echo "Confirm that everything works, and then delete it with \"docker volume rm ${__backup_vol}\"."
   __during_postgres=0
+}
+
+
+repair-reth() {
+# Check for Reth
+  __var="COMPOSE_FILE"
+  __get_value_from_env "${__var}" "${__env_file}" "__value"
+# I do mean to match literally
+# shellcheck disable=SC2076
+  if [[ ! "${__value}" =~ "reth.yml" ]]; then
+    if [ "${__during_update}" -eq 1 ]; then
+      return 0
+    else
+      echo "You do not appear to be using Reth. Aborting"
+      return 0
+    fi
+  fi
+
+  if [ "${__during_update}" -eq 1 ]; then
+  # Check for last Reth that touched the DB
+    set +e
+    __docompose exec -T -u root execution /bin/bash -c 'apt-get update && apt-get install -y --no-install-recommends jq'
+    __reth_db_version=$(__docompose exec -T execution /bin/bash -c 'RUST_LOG=off reth db --datadir /var/lib/reth list VersionHistory -r -l 1 --json --quiet | jq -r .[0][1].version')
+    __exitstatus=$?
+    set -e
+
+    if [[ "${__exitstatus}" -ne 0 || -z "${__reth_db_version}" ]]; then
+      echo "Cannot determine Reth DB version, skipping repair"
+      return 0
+    fi
+
+    __reth_major=$(echo "${__reth_db_version}" | awk -F. '{print $1}')
+    __reth_minor=$(echo "${__reth_db_version}" | awk -F. '{print $2}')
+
+    if [[ "${__reth_major}" -ge 2 || ( "${__reth_major}" -le 1 && "${__reth_minor}" -ge 7 ) ]]; then  # Last touched by Reth >= 1.7
+      return 0
+    fi
+  fi
+
+  if [ "${__non_interactive:-0}" -eq 0 ]; then
+    echo
+    while true; do
+      read -rp "WARNING - About to repair the Reth database. This can take 2 hours or more. Do you wish to continue? (Y/n) " __yn
+      case $__yn in
+        [Nn]o | [Nn]  ) echo "Skipping Reth database repair"; return 0;;
+        * ) break;;
+      esac
+    done
+  fi
+
+  __docompose exec execution touch /var/lib/reth/repair-trie
+  echo "Restarting Reth to initiate repair"
+  echo "You can monitor progress with \"./ethd logs -f execution\"."
+  restart execution
 }
 
 
@@ -1711,6 +1771,7 @@ update() {
   __pull_and_build
 
   __upgrade_postgres
+  repair-reth
 
   echo
   if [ "${__migrated}" -eq 1 ] && ! cmp -s "${__env_file}" "${__env_file}".source; then
@@ -3186,7 +3247,8 @@ cmd() {
 
 
 terminate() {
-  if [ -z "$(__dodocker volume ls -q -f "name=^$(basename "$(realpath .)" | tr '[:upper:]' '[:lower:]')_[^_]+")" ]; then
+  # Assume project name and volume are delimited by _ and there is no _ in the volume name. Done to avoid catching project-2 while looking at project
+  if [ -z "$(__dodocker volume ls -q -f "name=^$(basename "$(realpath .)" | tr '[:upper:]' '[:lower:]')_[^_]+$")" ]; then
     echo "There are no data stores - Docker volumes - left to remove for this Ethereum node."
     stop
     return 0
@@ -3204,7 +3266,7 @@ terminate() {
   stop
 # In this case I want the word splitting, so rm can remove all volumes
 # shellcheck disable=SC2046
-  __dodocker volume rm $(__dodocker volume ls -q -f "name=^$(basename "$(realpath .)" | tr '[:upper:]' '[:lower:]')_[^_]+")
+  __dodocker volume rm $(__dodocker volume ls -q -f "name=^$(basename "$(realpath .)" | tr '[:upper:]' '[:lower:]')_[^_]+$")
   echo
   echo "All containers stopped and all volumes deleted"
   echo
@@ -3284,7 +3346,9 @@ __query_deployment() {
     "node" "Ethereum node - consensus, execution and validator client" \
     "rpc" "Ethereum RPC node - consensus and execution client" \
     "lido_comp" "Lido-compatible node (Community Staking / Simple DVT)" \
-    "rocket" "Validator client only - integrate with RocketPool" 3>&1 1>&2 2>&3)
+    "rocket" "Validator client only - integrate with RocketPool" \
+    "ssv" "SSV node - consensus, execution and ssv-node" \
+    3>&1 1>&2 2>&3)
   elif uname -m | grep -q riscv64; then
     __deployment=$(whiptail --notags --title "Select deployment type" --menu \
     "What kind of deployment do you want to run?" 11 65 3 \
@@ -3311,6 +3375,7 @@ __query_deployment() {
       __deployment=$(whiptail --notags --title "Select deployment type for Lido" --menu \
       "What kind of deployment to participate in Lido protocol do you want to run?" 11 90 3 \
       "lido_csm" "[Community Staking] CSM node - Consensus, execution and validator client" \
+      "lido_ssv" "[Simple DVT] SSV node - Consensus, execution and ssv-node" \
       "lido_obol" "[Simple DVT] Obol node - Nodes, validator client and charon node (obol middleware)" 3>&1 1>&2 2>&3)
     elif uname -m | grep -q x86_64; then
       __deployment=$(whiptail --notags --title "Select deployment type for Lido" --menu \
@@ -3580,6 +3645,30 @@ __query_execution_client() {
         echo "Please remember to set your EL_WS_PORT to match EL_RPC_PORT for Erigon"
     fi
   fi
+}
+
+
+__query_ssv_client() {
+  if [ ! "${NETWORK}" = "hoodi" ]; then
+    SSV_CLIENT="ssv.yml"
+    echo "Your SSV client file is:" "${SSV_CLIENT}"
+    return 0
+  fi
+
+  __choices=()
+  __arch=$(uname -m)
+
+  __choices+=("ssv.yml" "SSV Node (Go)")
+  __choices+=("anchor.yml" "Anchor (Rust)")
+
+  __num_items=$(( ${#__choices[@]} / 2 ))
+  __menu_height=$(( 8 + __num_items ))
+
+  SSV_CLIENT=$(whiptail --notags --title "Select SSV client" --menu \
+  "Which SSV client do you want to run?" "${__menu_height}" 65 "${__num_items}" \
+  "${__choices[@]}" 3>&1 1>&2 2>&3)
+
+  echo "Your SSV client file is:" "${SSV_CLIENT}"
 }
 
 
@@ -4099,6 +4188,10 @@ __query_lido_obol_cluster_dkg() {
 }
 
 __query_dkg() {
+  if uname -m | grep -q aarch64 || uname -m | grep -q arm64; then  # No multi-arch image for ssvlabs/ssv-dkg as of July 16th 2025
+    return
+  fi
+
   __ssv_operator_id=-1
   if (whiptail --title "DKG ceremony" --yesno "Do you want to participate in DKG ceremonies as an operator?" 10 60); then
     __key_file_content=$(${__auto_sudo} cat ./ssv-config/encrypted_private_key.json)
@@ -4240,6 +4333,7 @@ config() {
         exit 1
       fi
       rm ssv-config/config.yaml.original
+      __query_ssv_client
       if [ ! -f "./ssv-config/password.pass" ]; then
         echo "Creating password file for encrypted SSV secret key"
         head -c 16 /dev/urandom | base64 | tr -d '[:space:]' >./ssv-config/password.pass
@@ -4248,10 +4342,24 @@ config() {
       fi
       if [ ! -f "./ssv-config/encrypted_private_key.json" ]; then
         echo "Creating encrypted operator private key"
-        __dodocker run --name ssv-node-key-generation -v "$(pwd)/ssv-config/password.pass":/password.pass \
-          -it ssvlabs/ssv-node:latest /go/bin/ssvnode generate-operator-keys \
-          --password-file=/password.pass && __dodocker cp ssv-node-key-generation:/encrypted_private_key.json \
-          ./ssv-config/encrypted_private_key.json && __dodocker rm ssv-node-key-generation
+        case "${SSV_CLIENT}" in
+          ssv.yml )
+            __dodocker run --name ssv-node-key-generation -v "$(pwd)/ssv-config/password.pass":/password.pass \
+              ssvlabs/ssv-node:latest /go/bin/ssvnode generate-operator-keys --password-file=/password.pass && \
+            __dodocker cp ssv-node-key-generation:/encrypted_private_key.json ./ssv-config/encrypted_private_key.json && \
+            __dodocker rm ssv-node-key-generation
+            ;;
+          anchor.yml )
+            __dodocker run --name anchor-key-generation -v "$(pwd)/ssv-config/password.pass":/password.pass \
+              sigp/anchor:latest keygen --password-file=/password.pass --encrypt && \
+            __dodocker cp anchor-key-generation:/encrypted_private_key.json ./ssv-config/encrypted_private_key.json && \
+            __dodocker rm anchor-key-generation
+            ;;
+          * )
+            echo "Unknown SSV client \"${SSV_CLIENT}\". This is a bug."
+            exit 70
+            ;;
+        esac
         ${__auto_sudo} chown 12000:12000 ./ssv-config/encrypted_private_key.json
       fi
       __query_dkg
@@ -4336,7 +4444,7 @@ config() {
         VE_LOCATOR_ADDRESS="0xC1d0b3DE6792Bf6b4b37EccdcC24e45978Cfd2Eb"
 # We are using the variable
 # shellcheck disable=SC2034
-        VE_ORACLE_ADDRESSES_ALLOWLIST='["0x73181107c8D9ED4ce0bbeF7A0b4ccf3320C41d12","0xA7410857ABbf75043d61ea54e07D57A6EB6EF186","0x404335BcE530400a5814375E7Ec1FB55fAff3eA2","0x946D3b081ed19173dC83Cd974fC69e1e760B7d78","0x007DE4a5F7bc37E2F26c0cb2E8A95006EE9B89b5","0xc79F702202E3A6B0B6310B537E786B9ACAA19BAf","0x61c91ECd902EB56e314bB2D5c5C07785444Ea1c8","0xe57B3792aDCc5da47EF4fF588883F0ee0c9835C9","0x285f8537e1dAeEdaf617e96C742F2Cf36d63CcfB"]'
+        VE_ORACLE_ADDRESSES_ALLOWLIST='["0x73181107c8D9ED4ce0bbeF7A0b4ccf3320C41d12","0x285f8537e1dAeEdaf617e96C742F2Cf36d63CcfB","0x404335BcE530400a5814375E7Ec1FB55fAff3eA2","0x946D3b081ed19173dC83Cd974fC69e1e760B7d78","0x007DE4a5F7bc37E2F26c0cb2E8A95006EE9B89b5","0xc79F702202E3A6B0B6310B537E786B9ACAA19BAf","0x61c91ECd902EB56e314bB2D5c5C07785444Ea1c8","0xe57B3792aDCc5da47EF4fF588883F0ee0c9835C9","0x4118DAD7f348A4063bD15786c299De2f3B1333F3"]'
 # We are using the variable
 # shellcheck disable=SC2034
         VE_STAKING_MODULE_ID="2"
@@ -4350,7 +4458,7 @@ config() {
         VE_LOCATOR_ADDRESS="0xe2EF9536DAAAEBFf5b1c130957AB3E80056b06D8"
 # We are using the variable
 # shellcheck disable=SC2034
-        VE_ORACLE_ADDRESSES_ALLOWLIST='["0xcA80ee7313A315879f326105134F938676Cfd7a9","0xf03B8DC8762B97F13Ac82e6F94bE3Ed002FF7459","0x1932f53B1457a5987791a40Ba91f71c5Efd5788F","0xf7aE520e99ed3C41180B5E12681d31Aa7302E4e5","0x99B2B75F490fFC9A29E4E1f5987BE8e30E690aDF","0x219743f1911d84B32599BdC2Df21fC8Dba6F81a2","0xD3b1e36A372Ca250eefF61f90E833Ca070559970","0x4c75FA734a39f3a21C57e583c1c29942F021C6B7","0xB1cC91878c1831893D39C2Bb0988404ca5Fa7918","0xfe43A8B0b481Ae9fB1862d31826532047d2d538c","0x43C45C2455C49eed320F463fF4f1Ece3D2BF5aE2","0x948A62cc0414979dc7aa9364BA5b96ECb29f8736"]'
+        VE_ORACLE_ADDRESSES_ALLOWLIST='["0xcA80ee7313A315879f326105134F938676Cfd7a9","0xf03B8DC8762B97F13Ac82e6F94bE3Ed002FF7459","0x1932f53B1457a5987791a40Ba91f71c5Efd5788F","0xf7aE520e99ed3C41180B5E12681d31Aa7302E4e5","0x99B2B75F490fFC9A29E4E1f5987BE8e30E690aDF","0x219743f1911d84B32599BdC2Df21fC8Dba6F81a2","0xD3b1e36A372Ca250eefF61f90E833Ca070559970","0x4c75FA734a39f3a21C57e583c1c29942F021C6B7","0x948A62cc0414979dc7aa9364BA5b96ECb29f8736","0xfe43A8B0b481Ae9fB1862d31826532047d2d538c","0x43C45C2455C49eed320F463fF4f1Ece3D2BF5aE2"]'
 # We are using the variable
 # shellcheck disable=SC2034
         VE_STAKING_MODULE_ID="2"
@@ -4423,15 +4531,31 @@ config() {
 # shellcheck disable=SC2034
     VE_OPERATOR_ID=$(whiptail --title "Lido Operator ID" --inputbox "Put your Operator ID from Lido Operators dashboard \
 (right-click to paste)" 10 60 3>&1 1>&2 2>&3)
-    __obol_prom_remote_token=$(whiptail --title "Obol prometheus" --inputbox "Put Obol Prometheus remote write token \
+    __obol_prom_remote_token=$(whiptail --title "Obol Prometheus" --inputbox "Put Obol Prometheus remote write token \
 (right-click to paste)" 10 60 3>&1 1>&2 2>&3)
     cat ./prometheus/obol-prom.yml.sample > ./prometheus/custom-prom.yml
     sed -i'.original' "s|      credentials: <PROM_REMOTE_WRITE_TOKEN>|      credentials: ${__obol_prom_remote_token}|" ./prometheus/custom-prom.yml
     rm -f ./prometheus/custom-prom.yml.original
+    OBOL_CHARON_REMOTE_LOKI_ADDRESSES=$(whiptail --title "Obol Loki" --inputbox "Put Obol Loki remote URL \
+(right-click to paste)" 10 60 3>&1 1>&2 2>&3)
+    if [ -n "${OBOL_CHARON_REMOTE_LOKI_ADDRESSES}" ]; then
+      OBOL_CLUSTER_NAME=$(whiptail --title "Obol cluster name" --inputbox "Put your Obol cluster name \
+(right-click to paste)" 10 60 "Eth Docker" 3>&1 1>&2 2>&3)
+      OBOL_CLUSTER_PEER=$(whiptail --title "Obol cluster peer" --inputbox "Put your Obol cluster peer \
+(right-click to paste)" 10 60 "eth-docker" 3>&1 1>&2 2>&3)
+    else
+# This gets used, but shellcheck doesn't recognize that
+# shellcheck disable=SC2034
+      OBOL_CLUSTER_NAME=""
+# This gets used, but shellcheck doesn't recognize that
+# shellcheck disable=SC2034
+      OBOL_CLUSTER_PEER=""
+      echo "Obol Loki remote URL is empty, skipping"
+    fi
   fi
 
   if [ "${CONSENSUS_CLIENT}" = "caplin" ]; then
-    COMPOSE_FILE="${EXECUTION_CLIENT}"
+    COMPOSE_FILE="${EXECUTION_CLIENT}:caplin-ports.yml"
   else
     COMPOSE_FILE="${CONSENSUS_CLIENT}"
     if [ -n "${EXECUTION_CLIENT+x}" ]; then
@@ -4439,7 +4563,7 @@ config() {
     fi
   fi
   if [[ "${__deployment}" = "ssv" || "${__deployment}" = "lido_ssv" ]]; then
-    COMPOSE_FILE="${COMPOSE_FILE}:ssv.yml"
+    COMPOSE_FILE="${COMPOSE_FILE}:${SSV_CLIENT}"
     if [[ -n "${__ssv_operator_id}" && ! "${__ssv_operator_id}" = "-1" ]]; then
       COMPOSE_FILE="${COMPOSE_FILE}:ssv-dkg.yml"
     fi
@@ -4452,6 +4576,9 @@ config() {
   fi
   if [ "${__deployment}" = "lido_obol" ]; then
     COMPOSE_FILE="${COMPOSE_FILE}:lido-obol.yml"
+    if [ -n "${OBOL_CHARON_REMOTE_LOKI_ADDRESSES}" ]; then
+      COMPOSE_FILE="${COMPOSE_FILE}:lido-obol-promtail.yml"
+    fi
   fi
   if { [ "${__deployment}" = "node" ] || [ "${__deployment}" = "rocket" ]; } \
   && [[ "${NETWORK}" =~ (hoodi|holesky) ]]; then
@@ -4521,6 +4648,12 @@ config() {
     __update_value_in_env "${__var}" "${!__var-}" "${__env_file}"
     __var=VE_STAKING_MODULE_ID
     __update_value_in_env "${__var}" "${!__var-}" "${__env_file}"
+    __var=OBOL_CHARON_REMOTE_LOKI_ADDRESSES
+    __update_value_in_env "${__var}" "${!__var-}" "${__env_file}"
+    __var=OBOL_CLUSTER_NAME
+    __update_value_in_env "${__var}" "${!__var-}" "${__env_file}"
+    __var=OBOL_CLUSTER_PEER
+    __update_value_in_env "${__var}" "${!__var-}" "${__env_file}"
 # We are using the variable
 # shellcheck disable=SC2034
     ENABLE_DIST_ATTESTATION_AGGR="true"
@@ -4578,6 +4711,10 @@ version() {
       ;;&
     *ssv.yml* )
       __docompose exec ssv-node /go/bin/ssvnode --version
+      echo
+      ;;&
+    *anchor.yml* )
+      __docompose exec anchor anchor node --version
       echo
       ;;&
     *lighthouse.yml* | *lighthouse-cl-only* )
@@ -4749,6 +4886,8 @@ __full_help() {
   echo "    stops the execution client and prunes pre-merge history, if supported."
   echo "  prune-lighthouse [--non-interactive]"
   echo "    stops the Lighthouse consensus client and prunes state."
+  echo "  repair-reth"
+  echo "    stops the Reth execution client and repairs its database."
   echo "  resync-execution"
   echo "    removes the execution layer database and forces a resync."
   echo "  resync-consensus"
@@ -4871,7 +5010,7 @@ fi
 case "$__command" in
   help|config|keys|update|up|start|down|stop|restart|version|logs|cmd|terminate|prune-nethermind\
       |prune-besu|prune-reth|prune-history|prune-lighthouse|resync-execution|resync-consensus|attach-geth\
-      |keyimport|space)
+      |repair-reth|keyimport|space)
     $__command "$@";;
   *)
     echo "Unrecognized command $__command"

@@ -1,5 +1,6 @@
+# hadolint global ignore=DL3007,DL3008,DL3059,DL4006
 # Build Nimbus in a stock debian container
-FROM debian:bookworm-slim AS builder
+FROM debian:trixie-slim AS builder
 
 # Included here to avoid build-time complaints
 ARG DOCKER_TAG
@@ -11,26 +12,26 @@ ARG BUILD_TARGET
 ARG SRC_REPO
 ARG SECONDS_PER_SLOT=12
 
-RUN apt-get update && apt-get install -y build-essential ca-certificates bash git-lfs cmake
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential ca-certificates bash git-lfs cmake
 
 WORKDIR /usr/src
-RUN bash -c "git clone ${SRC_REPO} nimbus-eth2 && cd nimbus-eth2 && git config advice.detachedHead false && git fetch --all --tags && git checkout ${BUILD_TARGET} && \
-	make -j$(nproc) update && make -j$(nproc) NIMFLAGS="-d:SECONDS_PER_SLOT=${SECONDS_PER_SLOT}" nimbus_beacon_node nimbus_validator_client"
+RUN bash -o pipefail -c "git clone ${SRC_REPO} nimbus-eth2 && cd nimbus-eth2 && git config advice.detachedHead false && git fetch --all --tags && git checkout ${BUILD_TARGET} && \
+	make -j$(nproc) update && make -j$(nproc) NIMFLAGS=\"-d:SECONDS_PER_SLOT=${SECONDS_PER_SLOT}\" nimbus_beacon_node nimbus_validator_client"
 
 # Pull all binaries into a second stage deploy debian container
-FROM debian:bookworm-slim AS consensus
+FROM debian:trixie-slim AS consensus
 
 ARG USER=user
 ARG UID=10002
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get install -y --no-install-recommends \
-  ca-certificates bash tzdata git \
+  ca-certificates bash tzdata git adduser \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
         apt-get update; \
-        apt-get install -y gosu; \
+        apt-get install -y --no-install-recommends gosu; \
         rm -rf /var/lib/apt/lists/*; \
 # verify that the binary works
         gosu nobody true
@@ -58,13 +59,14 @@ USER ${USER}
 
 ENTRYPOINT ["nimbus_beacon_node"]
 
-FROM debian:bookworm-slim AS validator
+FROM debian:trixie-slim AS validator
 
 ARG USER=user
 ARG UID=10000
 
-RUN apt-get update && apt-get install -y \
-  ca-certificates bash tzdata curl gosu
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  ca-certificates bash tzdata curl gosu adduser \
+  && rm -rf /var/lib/apt/lists/* && gosu nobody true
 
 # See https://stackoverflow.com/a/55757473/12429735RUN
 RUN adduser \

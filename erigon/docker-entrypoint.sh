@@ -68,16 +68,16 @@ if [ "${ARCHIVE_NODE}" = "true" ]; then
   __prune="--prune.mode=archive --prune.distance=0"
 elif [ "${MINIMAL_NODE}" = "aggressive" ]; then
   echo "Erigon minimal node with aggressive expiry"
-  __prune="--prune.mode=minimal"
+  __prune="--prune.mode=minimal --experiment.persist.receipts.v2=false"
 elif [ "${MINIMAL_NODE}" = "true" ]; then
   case "${NETWORK}" in
     mainnet | sepolia )
       echo "Erigon minimal node with pre-merge history expiry"
-      __prune="--prune.mode=full"
+      __prune="--prune.mode=full --experiment.persist.receipts.v2=false"
       ;;
     * )
       echo "There is no pre-merge history for ${NETWORK} network, Erigon will use \"full\" pruning."
-      __prune="--prune.mode=full"
+      __prune="--prune.mode=full --experiment.persist.receipts.v2=false"
       ;;
   esac
 else
@@ -94,6 +94,7 @@ else
   echo "Running Erigon with internal Caplin consensus layer client"
   __caplin="--caplin.discovery.addr=0.0.0.0 --caplin.discovery.port=${CL_P2P_PORT} --caplin.blobs-immediate-backfill=true"
   __caplin+=" --caplin.discovery.tcpport=${CL_P2P_PORT} --caplin.validator-monitor=true"
+  __caplin+=" --caplin.max-peer-count=${CL_MAX_PEER_COUNT}"
   __caplin+=" --beacon.api=beacon,builder,config,debug,events,node,validator,lighthouse"
   __caplin+=" --beacon.api.addr=0.0.0.0 --beacon.api.port=${CL_REST_PORT} --beacon.api.cors.allow-origins=*"
   if [ "${MEV_BOOST}" = "true" ]; then
